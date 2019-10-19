@@ -3,4 +3,4 @@ project(WFiIS_2019_PSiC_Lab02)
 
 set(CMAKE_CXX_STANDARD 14)
 
-add_subdirectory("${PROJECT_SOURCE_DIR}/Lab02" "${PROJECT_SOURCE_DIR}/Lab02/output")
+add_executable(WFiIS_2019_PSiC_Lab02 main.cpp server.hpp server.cpp)
