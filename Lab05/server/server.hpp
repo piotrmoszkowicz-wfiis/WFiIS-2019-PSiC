@@ -1,16 +1,15 @@
 #include <iostream>
 #include <cstdlib>
-#include <cstring>
 #include <string>
 #include <cerrno>
-#include <vector>
-#include <fcntl.h>
 #include <unistd.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <netdb.h>
-#include <poll.h>
+
+#include <openssl/dh.h>
+#include <openssl/err.h>
 
 /**
  * @struct ClientData
@@ -21,15 +20,6 @@ struct ClientData {
     const uint16_t port; /** Port **/
     const int protocol; /** Protocol ID **/
 };
-
-struct ReceiveData {
-    ReceiveData(int length, const char* buffer) : m_length(length), m_buffer(buffer) {}
-    ~ReceiveData() {
-        delete [] m_buffer;
-    }
-    int m_length;
-    const char* m_buffer;
-}; // TODO: CHange to std::string from that strange structure
 
 /**
  * @class Server
@@ -44,9 +34,11 @@ public:
      * @param [cinst uint16_t]  server_port - Port of TCP Server
      */
     Server(const char *server_host, const uint16_t server_port) : m_server_host(server_host),
-                                                                  m_server_port(server_port) {
-        m_descriptor = pollfd{};
-        m_descriptors = std::vector<pollfd>{};
+                                                                  m_server_port(server_port), m_descriptor(0),
+                                                                  m_current_connection_descriptor(0) {
+        m_receive_buffer = std::string{};
+        m_key = DH_get_2048_256();
+        m_secret = new unsigned char[2048];
     }
 
     /**
@@ -54,8 +46,7 @@ public:
      * @brief Destructor of Server class
      */
     ~Server() {
-        Server::close(m_descriptor.fd);
-        std::cout << "Main server is closed..." << std::endl;
+        delete[] m_secret;
     }
 
     /**
@@ -85,36 +76,6 @@ public:
     ClientData static get_client_data(sockaddr_in &client_addr);
 
     /**
-     * @fn error_handler
-     * @brief Handles errno network errors
-     * @param [const char*] invoker     - Invoker of error handler
-     * @param [int] result              - Result of operation
-     * @param [bool] onMinusOne         - Whether handle if result is -1 or other
-     * @param [bool] eq                 - Whether handle if result is equal to -1/other or not equal
-     */
-    void static error_handler(const char* invoker, int result, bool onMinusOne = true, bool eq = true);
-
-    /**
-     * @fn send_data
-     * @brief Sends data to the socket
-     * @param [const char*] message       - Data to send
-     */
-    void static send_data(int descriptor, const char *message);
-
-    /**
-     * @fn receive_data
-     * @brief Receives data from the socket
-     * @return [char*]                    - Data sent to socket by client
-     */
-    static ReceiveData* receive_data(int descriptor);
-
-    /**
-     * @fn close
-     * @brief Closes TCP Socket
-     */
-    void static close(int descriptor);
-
-    /**
      * @fn allocate_descriptor
      * @brief Allocates socket descriptor
      */
@@ -138,44 +99,48 @@ public:
      * @brief Accept certain connection and create new descriptor for it
      * @param [sockaddr_in&] client_addr  - Client's address
      */
-    int accept();
+    void accept(sockaddr_in &client_addr);
 
     /**
-     * @fn set_descriptor_flag
-     * @brief Sets certain descriptor flag
-     * @param flag                        - Flag to set
+     * @fn send_data
+     * @brief Sends data to the socket
+     * @param [const char*] message       - Data to send
      */
-    void set_descriptor_flag(int flag);
+    void send_data(const char *message);
 
     /**
-     * @fn poll
-     * @brief Checks what descriptors have changed
-     * @param timeout                     - Timeout in miliseconds
-     * @return [int]                      - Number of descriptors changed
+     * @fn receive_data
+     * @brief Receives data from the socket
+     * @return [std::string&]                    - Data sent to socket by client
      */
-    int poll(int timeout);
-
+    std::string& receive_data();
 
     /**
-     * @fn get_server_descriptor
-     * @return
+     * @fn close
+     * @brief Closes TCP Socket
      */
-    pollfd& get_server_descriptor() {
-        return m_descriptor;
-    }
+    void close();
 
-    /**
-     * @fn get_descriptors
-     * @brief Gets vector of descriptors
-     * @return [std::vector<pollfd>]    - Vector of descriptors
-     */
-    std::vector<pollfd>& get_descriptors() {
-        return m_descriptors;
-    }
+    void send_key();
+
+    void get_key();
 
 private:
+    /**
+     * @fn error_handler
+     * @brief Handles errno network errors
+     * @param [const char*] invoker     - Invoker of error handler
+     * @param [int] result              - Result of operation
+     * @param [bool] onMinusOne         - Whether handle if result is -1 or other
+     * @param [bool] eq                 - Whether handle if result is equal to -1/other or not equal
+     */
+    void static error_handler(const char* invoker, int result, bool onMinusOne = true, bool eq = true);
+
     const char *m_server_host; /** Server HOST IP **/
     const uint16_t m_server_port; /** Server PORT **/
-    pollfd m_descriptor; /** Server descriptor **/
-    std::vector<pollfd> m_descriptors; /** Pool of descriptors to check on **/
+    int m_descriptor; /** Server descriptor **/
+    int m_current_connection_descriptor; /** Accepted connection descriptor **/
+    std::string m_receive_buffer; /** Message receive buffer **/
+    DH *m_key;
+    unsigned char* m_secret;
 };

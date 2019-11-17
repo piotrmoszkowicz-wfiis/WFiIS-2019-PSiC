@@ -1,3 +1,5 @@
+#pragma once
+
 #include <iostream>
 #include <cstdlib>
 #include <cstring>
@@ -12,6 +14,9 @@
 #include <netdb.h>
 #include <poll.h>
 
+#include <openssl/err.h>
+#include <openssl/ssl.h>
+
 /**
  * @struct ClientData
  * @brief Structure which includes needed TCP ClientData
@@ -22,14 +27,21 @@ struct ClientData {
     const int protocol; /** Protocol ID **/
 };
 
+struct DescriptorWithSSL {
+    pollfd m_descriptor;
+    SSL* m_ssl;
+};
+
 struct ReceiveData {
-    ReceiveData(int length, const char* buffer) : m_length(length), m_buffer(buffer) {}
+    ReceiveData(int length, const char *buffer) : m_length(length), m_buffer(buffer) {}
+
     ~ReceiveData() {
-        delete [] m_buffer;
+        delete[] m_buffer;
     }
+
     int m_length;
-    const char* m_buffer;
-}; // TODO: CHange to std::string from that strange structure
+    const char *m_buffer;
+};
 
 /**
  * @class Server
@@ -44,9 +56,13 @@ public:
      * @param [cinst uint16_t]  server_port - Port of TCP Server
      */
     Server(const char *server_host, const uint16_t server_port) : m_server_host(server_host),
-                                                                  m_server_port(server_port) {
-        m_descriptor = pollfd{};
-        m_descriptors = std::vector<pollfd>{};
+                                                                  m_server_port(server_port),
+                                                                  m_descriptor(pollfd{}) {
+        m_descriptors = std::vector<DescriptorWithSSL>{};
+
+        init_openssl();
+        create_context();
+        configure_context();
     }
 
     /**
@@ -92,21 +108,23 @@ public:
      * @param [bool] onMinusOne         - Whether handle if result is -1 or other
      * @param [bool] eq                 - Whether handle if result is equal to -1/other or not equal
      */
-    void static error_handler(const char* invoker, int result, bool onMinusOne = true, bool eq = true);
+    void static error_handler(const char *invoker, int result, bool onMinusOne = true, bool eq = true);
 
     /**
      * @fn send_data
      * @brief Sends data to the socket
+     * @param [SSL*]        ssl           - SSL object
      * @param [const char*] message       - Data to send
      */
-    void static send_data(int descriptor, const char *message);
+    void static send_data(SSL* ssl, const char *message);
 
     /**
      * @fn receive_data
      * @brief Receives data from the socket
+     * @param [SSL*]        ssl           - SSL object
      * @return [char*]                    - Data sent to socket by client
      */
-    static ReceiveData* receive_data(int descriptor);
+    static ReceiveData *receive_data(SSL* ssl);
 
     /**
      * @fn close
@@ -160,7 +178,7 @@ public:
      * @fn get_server_descriptor
      * @return
      */
-    pollfd& get_server_descriptor() {
+    pollfd &get_server_descriptor() {
         return m_descriptor;
     }
 
@@ -169,13 +187,22 @@ public:
      * @brief Gets vector of descriptors
      * @return [std::vector<pollfd>]    - Vector of descriptors
      */
-    std::vector<pollfd>& get_descriptors() {
+    std::vector<DescriptorWithSSL> &get_descriptors() {
         return m_descriptors;
     }
 
+    SSL_CTX* get_ssl_ctx() {
+        return m_ssl_ctx;
+    }
+
 private:
+    void static init_openssl();
+    void create_context();
+    void configure_context();
+
     const char *m_server_host; /** Server HOST IP **/
     const uint16_t m_server_port; /** Server PORT **/
     pollfd m_descriptor; /** Server descriptor **/
-    std::vector<pollfd> m_descriptors; /** Pool of descriptors to check on **/
+    std::vector<DescriptorWithSSL> m_descriptors; /** Pool of descriptors to check on **/
+    SSL_CTX* m_ssl_ctx;
 };

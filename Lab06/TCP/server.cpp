@@ -22,12 +22,11 @@ ClientData Server::get_client_data(sockaddr_in &client_addr) {
     // NOLINTNEXTLINE
     auto client_port_network = ntohs(client_addr.sin_port);
     std::string client_port_str = std::to_string(client_port_network);
-    char *client_port_char = new char[client_port_str.length() + 1]; // TODO: No need for buffer, just .c_str() as string API
+    char *client_port_char = new char[client_port_str.length() + 1];
     std::strcpy(client_port_char, client_port_str.c_str());
 
-    auto addr_info = new addrinfo; // TODO: nullptr instead of addr_info
-    auto addr_info_tab = new addrinfo[5]; // TODO: nie ma potrzeby inicjowania wskaźnika,
-                                          // funkcja getaddrinfo() zaalokuje strukturę, za to należy wtedy wywołać freeadddinfo()
+    auto addr_info = new addrinfo;
+    auto addr_info_tab = new addrinfo[5];
 
     int addr_info_success = getaddrinfo(inet_ntoa(client_addr.sin_addr), client_port_char, addr_info, &addr_info_tab);
     error_handler("GetClientData-GetAddrInfo", addr_info_success, false, false);
@@ -56,7 +55,13 @@ void Server::allocate_descriptor() {
             POLLIN
     };
     m_descriptor.fd = server_descriptor;
-    m_descriptors.push_back(new_descriptor_pollfd);
+
+    auto descriptor_with_ssl = new DescriptorWithSSL{
+            new_descriptor_pollfd,
+            nullptr
+    };
+
+    m_descriptors.push_back(*descriptor_with_ssl);
 
     std::cout << "Descriptor has been allocated" << std::endl;
 }
@@ -84,14 +89,27 @@ int Server::accept() {
             connection_descriptor,
             POLLIN
     };
-    m_descriptors.push_back(new_descriptor_pollfd);
+
+    SSL* ssl;
+    ssl = SSL_new(this->get_ssl_ctx());
+    SSL_set_accept_state(ssl);
+    SSL_set_fd(ssl, new_descriptor_pollfd.fd);
+
+    /* auto ssl_loc = new SSL();
+    *ssl_loc = *ssl; */
+
+    auto descriptor_with_ssl = new DescriptorWithSSL{
+        new_descriptor_pollfd,
+        ssl
+    };
+
+    m_descriptors.push_back(*descriptor_with_ssl);
     return connection_descriptor;
 }
 
-void Server::send_data(int descriptor, const char *message) {
+void Server::send_data(SSL* ssl, const char *message) {
     std::cout << "Trying to send out data" << std::endl;
-    ssize_t send_length = send(descriptor, message, strlen(message) + 1, 0);
-    error_handler("SendData", send_length);
+    SSL_write(ssl, message, strlen(message) + 1);
     std::cout << "Data has been sent" << std::endl;
 }
 
@@ -101,16 +119,34 @@ void Server::set_descriptor_flag(int flag) {
 }
 
 int Server::poll(int timeout) {
-    int poll_result = ::poll(m_descriptors.data(), m_descriptors.size(), timeout);
+    int i = 0;
+    auto descriptors_array = new pollfd[m_descriptors.size()];
+
+    for (auto descriptor : m_descriptors) {
+        descriptors_array[i] = descriptor.m_descriptor;
+        i++;
+    }
+
+    int poll_result = ::poll(descriptors_array, m_descriptors.size(), timeout);
     error_handler("Poll", poll_result);
+
+    for (i = 0; i < m_descriptors.size(); i++) {
+        m_descriptors[i].m_descriptor = descriptors_array[i];
+    }
+
+    delete [] descriptors_array;
+
     return poll_result;
 }
 
-ReceiveData *Server::receive_data(int descriptor) {
+ReceiveData *Server::receive_data(SSL* ssl) {
     auto buffer = new char[1024];
-    ssize_t recive_length = recv(descriptor, (void *) buffer, sizeof(buffer),
-                                 0);
-    error_handler("ReceiveData", recive_length);
+    int recive_length = SSL_read(ssl, buffer, sizeof(buffer));
+
+    if (recive_length == -1) {
+        ERR_print_errors_fp(stderr);
+    }
+
     auto receive_data = new ReceiveData(
             recive_length,
             buffer
@@ -131,5 +167,41 @@ void Server::error_handler(const char* invoker, int result, bool onMinusOne, boo
         if (std::strcmp(invoker, "BindDescriptor") == 0) {
             exit(0);
         }
+    }
+}
+
+void Server::init_openssl() {
+    SSL_load_error_strings();
+    OpenSSL_add_ssl_algorithms();
+}
+
+void Server::create_context() {
+    const SSL_METHOD *method;
+
+    method = SSLv23_server_method();
+
+    m_ssl_ctx = SSL_CTX_new(method);
+    if (!m_ssl_ctx) {
+        perror("Unable to create SSL context");
+        auto err = ERR_get_error();
+        std::cout << ERR_error_string(err, nullptr) << std::endl;
+        exit(EXIT_FAILURE);
+    }
+}
+
+void Server::configure_context() {
+    SSL_CTX_set_ecdh_auto(m_ssl_ctx, 1);
+
+    /* Set the key and cert */
+    if (SSL_CTX_use_certificate_file(m_ssl_ctx, "server.crt", SSL_FILETYPE_PEM) <= 0) {
+        auto err = ERR_get_error();
+        std::cout << "ServerCrtErr" << ERR_error_string(err, nullptr) << std::endl;
+        exit(EXIT_FAILURE);
+    }
+
+    if (SSL_CTX_use_PrivateKey_file(m_ssl_ctx, "server.key", SSL_FILETYPE_PEM) <= 0 ) {
+        auto err = ERR_get_error();
+        std::cout << "ServerKeyErr" << ERR_error_string(err, nullptr) << std::endl;
+        exit(EXIT_FAILURE);
     }
 }

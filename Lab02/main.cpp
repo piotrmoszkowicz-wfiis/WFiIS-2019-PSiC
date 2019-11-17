@@ -44,7 +44,7 @@ int main() {
                         std::cout << "Message: " << std::endl << receiveData->m_buffer << std::endl << "Length:" << receiveData->m_length << std::endl;
                         if (receiveData->m_length == 0) {
                             Server::close(descriptor.fd);
-                            descriptors.erase(descriptors.begin() + index);
+                            descriptors.erase(descriptors.begin() + index); // TODO: Fix range loop
                         } else {
                             Server::send_data(descriptor.fd, receiveData->m_buffer);
                         }
